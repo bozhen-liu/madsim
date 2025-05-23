@@ -2,30 +2,27 @@
 
 use super::{
     rand::GlobalRng,
-    runtime::{NodeBuilder, Simulators},
-    time::{TimeHandle, TimeRuntime},
+    runtime::{ NodeBuilder, Simulators },
+    time::{ TimeHandle, TimeRuntime },
     utils::mpsc,
 };
 use futures_util::FutureExt;
 use rand::Rng;
 use spin::Mutex;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{ BTreeMap, HashMap },
     fmt,
     future::Future,
     io,
     ops::Deref,
     panic::Location,
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Weak,
-    },
-    task::{Context, Poll, Waker},
-    time::{Duration, Instant},
+    sync::{ atomic::{ AtomicBool, AtomicU64, Ordering }, Arc, Weak },
+    task::{ Context, Poll, Waker },
+    time::{ Duration, Instant },
 };
 use tokio::sync::watch;
-use tracing::{debug, error, error_span, trace, Span};
+use tracing::{ debug, error, error_span, trace, Span };
 
 pub use tokio::task::yield_now;
 
@@ -175,6 +172,25 @@ impl NodeInfo {
     }
 }
 
+
+
+/// bz: afg_auth: collect each user’s authentication methods (e.g., token, OAuth, multi-factor) with their permission levels and durations
+pub fn afg_auth() {}
+
+/// bz: afg_monitor check the current asynchronous task's context: capture the current stack trace, allowing us to intercept and log memory accesses of param.
+pub fn afg_monitor<T>(param: &T) {
+    let info = crate::context::current_task();
+    println!(
+        "Task Info: id={}, name={:?}, node_id={}, location={}",
+        info.id,
+        info.name,
+        info.node.id,
+        info.location
+    );
+    let raw_address = param as *const T as usize; // Get the raw address as a usize
+    println!("Raw address of parameter: {:#x}", raw_address);
+}
+
 impl Executor {
     pub fn new(rand: GlobalRng, sims: Arc<Simulators>) -> Self {
         let (sender, queue) = mpsc::channel();
@@ -222,20 +238,24 @@ impl Executor {
         let sender = self.handle.sender.clone();
         let info = self.handle.main_info.new_task(None);
         let (runnable, task) = unsafe {
-            async_task::Builder::new()
+            async_task::Builder
+                ::new()
                 .metadata(Arc::downgrade(&info))
                 .spawn_unchecked(
                     move |_| async move {
                         let _info = info; // drop the info when the future is dropped
                         future.await
                     },
-                    move |runnable| _ = sender.send(runnable),
+                    move |runnable| {
+                        _ = sender.send(runnable);
+                    }
                 )
         };
         runnable.schedule();
 
-        let allow_system_thread =
-            crate::context::try_current(|h| h.allow_system_thread).unwrap_or_default();
+        let allow_system_thread = crate::context
+            ::try_current(|h| h.allow_system_thread)
+            .unwrap_or_default();
         loop {
             self.run_all_ready();
             if task.is_finished() {
@@ -251,10 +271,7 @@ impl Executor {
                 }
             }
             if let Some(limit) = self.time_limit {
-                assert!(
-                    self.time.handle().elapsed() < limit,
-                    "time limit exceeded: {limit:?}"
-                )
+                assert!(self.time.handle().elapsed() < limit, "time limit exceeded: {limit:?}");
             }
         }
     }
@@ -266,14 +283,15 @@ impl Executor {
                 // future has been dropped
                 continue;
             };
-            let work = if info.cancelled.load(Ordering::Relaxed)
-                || info.node.killed.load(Ordering::Relaxed)
+            let work = if
+                info.cancelled.load(Ordering::Relaxed) ||
+                info.node.killed.load(Ordering::Relaxed)
             {
                 // cancelled task or killed node: drop the future
                 drop
             } else if info.node.paused.load(Ordering::Relaxed) {
                 // paused task: push to waiting list
-                (self.nodes.lock().get_mut(&info.node.id).unwrap().paused).push(runnable);
+                self.nodes.lock().get_mut(&info.node.id).unwrap().paused.push(runnable);
                 continue;
             } else {
                 fn run(runnable: Runnable) {
@@ -295,22 +313,23 @@ impl Executor {
                     info.location
                 );
                 let error_msg = panic_message::panic_message(&e);
-                if info.node.restart_on_panic
-                    || (info.node.restart_on_panic_matching.iter()).any(|s| error_msg.contains(s))
+                if
+                    info.node.restart_on_panic ||
+                    info.node.restart_on_panic_matching.iter().any(|s| error_msg.contains(s))
                 {
                     let node_id = info.node.id;
-                    let delay = self
-                        .rand
-                        .with(|rng| rng.gen_range(Duration::from_secs(1)..Duration::from_secs(10)));
+                    let delay = self.rand.with(|rng|
+                        rng.gen_range(Duration::from_secs(1)..Duration::from_secs(10))
+                    );
                     error!(
                         "task panicked, restarting node {} {:?} after {:?}",
-                        node_id, info.node.name, delay
+                        node_id,
+                        info.node.name,
+                        delay
                     );
                     self.kill(node_id);
                     let h = self.handle.clone();
-                    self.time
-                        .handle()
-                        .add_timer(delay, move || h.restart(node_id));
+                    self.time.handle().add_timer(delay, move || h.restart(node_id));
                 } else {
                     std::panic::resume_unwind(e);
                 }
@@ -393,10 +412,12 @@ impl TaskHandle {
         old_info.kill();
 
         if let Some(init) = &node.init {
-            init(&Spawner {
-                sender: self.sender.clone(),
-                info: node.info.clone(),
-            });
+            init(
+                &(Spawner {
+                    sender: self.sender.clone(),
+                    info: node.info.clone(),
+                })
+            );
         }
     }
 
@@ -512,10 +533,7 @@ impl TaskHandle {
             .values()
             .map(|node| {
                 (
-                    node.info
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("node-{}", node.info.id)),
+                    node.info.name.clone().unwrap_or_else(|| format!("node-{}", node.info.id)),
                     node.info.num_tasks(),
                 )
             })
@@ -523,16 +541,12 @@ impl TaskHandle {
     }
 
     pub fn num_tasks_by_node_by_spawn(&self) -> String {
-        let map = self
-            .nodes
+        let map = self.nodes
             .lock()
             .values()
             .map(|node| {
                 (
-                    node.info
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("node-{}", node.info.id)),
+                    node.info.name.clone().unwrap_or_else(|| format!("node-{}", node.info.id)),
                     node.info.num_tasks_by_spawn(),
                 )
             })
@@ -555,10 +569,17 @@ impl ToNodeId for NodeId {
 
 impl ToNodeId for &str {
     fn to_node_id(&self, task: &TaskHandle) -> NodeId {
-        match (task.nodes.lock().iter()).find(|(_, node)| match &node.info.name {
-            Some(name) => name == self,
-            None => false,
-        }) {
+        match
+            task.nodes
+                .lock()
+                .iter()
+                .find(|(_, node)| {
+                    match &node.info.name {
+                        Some(name) => name == self,
+                        None => false,
+                    }
+                })
+        {
             Some((id, _)) => *id,
             None => panic!("node not found: {self}"),
         }
@@ -605,9 +626,7 @@ impl Spawner {
     /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
     #[track_caller]
     pub fn spawn<F>(&self, future: F) -> JoinHandle<F::Output>
-    where
-        F: Future + Send + 'static,
-        F::Output: Send + 'static,
+        where F: Future + Send + 'static, F::Output: Send + 'static
     {
         self.spawn_inner(future, None)
     }
@@ -615,9 +634,7 @@ impl Spawner {
     /// Spawns a `!Send` future on the local task set.
     #[track_caller]
     pub fn spawn_local<F>(&self, future: F) -> JoinHandle<F::Output>
-    where
-        F: Future + 'static,
-        F::Output: 'static,
+        where F: Future + 'static, F::Output: 'static
     {
         self.spawn_inner(future, None)
     }
@@ -625,9 +642,7 @@ impl Spawner {
     /// Spawns a future on with name.
     #[track_caller]
     fn spawn_inner<F>(&self, future: F, name: Option<&str>) -> JoinHandle<F::Output>
-    where
-        F: Future + 'static,
-        F::Output: 'static,
+        where F: Future + 'static, F::Output: 'static
     {
         if self.info.killed.load(Ordering::Relaxed) {
             tracing::warn!("spawning task on a killed node, the task will never run");
@@ -637,17 +652,20 @@ impl Spawner {
         trace!(id = %info.id, name, "spawn task");
 
         let info1 = info.clone();
-        let (runnable, task) = async_task::Builder::new()
+        let (runnable, task) = async_task::Builder
+            ::new()
             .metadata(Arc::downgrade(&info))
             .spawn_local(
                 move |_| async move {
                     let _info = info1; // drop the info when the future is dropped
                     future.await
                 },
-                move |runnable| _ = sender.send(runnable),
+                move |runnable| {
+                    _ = sender.send(runnable);
+                }
             );
         // SAFETY: info can not be accessed by others.
-        unsafe { &mut *Arc::as_ptr(&info).cast_mut() }.waker = runnable.waker();
+        (unsafe { &mut *Arc::as_ptr(&info).cast_mut() }).waker = runnable.waker();
         runnable.schedule();
 
         JoinHandle::new(info, task.fallible())
@@ -664,9 +682,7 @@ impl Spawner {
 /// Spawns a new asynchronous task, returning a [`JoinHandle`] for it.
 #[track_caller]
 pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
+    where F: Future + Send + 'static, F::Output: Send + 'static
 {
     Spawner::current().spawn(future)
 }
@@ -674,22 +690,15 @@ where
 /// Spawns a `!Send` future on the local task set.
 #[track_caller]
 pub fn spawn_local<F>(future: F) -> JoinHandle<F::Output>
-where
-    F: Future + 'static,
-    F::Output: 'static,
+    where F: Future + 'static, F::Output: 'static
 {
     Spawner::current().spawn_local(future)
 }
 
 /// Runs the provided closure on a thread where blocking is acceptable.
-#[deprecated(
-    since = "0.3.0",
-    note = "blocking function is not allowed in simulation"
-)]
+#[deprecated(since = "0.3.0", note = "blocking function is not allowed in simulation")]
 pub fn spawn_blocking<F, R>(f: F) -> JoinHandle<R>
-where
-    F: FnOnce() -> R + Send + 'static,
-    R: Send + 'static,
+    where F: FnOnce() -> R + Send + 'static, R: Send + 'static
 {
     Spawner::current().spawn(async move { f() })
 }
@@ -720,11 +729,11 @@ impl fmt::Display for Id {
 unsafe extern "C" fn sched_getaffinity(
     pid: libc::pid_t,
     cpusetsize: libc::size_t,
-    cpuset: *mut libc::cpu_set_t,
+    cpuset: *mut libc::cpu_set_t
 ) -> libc::c_int {
     if let Some(info) = crate::context::try_current_task() {
         assert_eq!(cpusetsize, std::mem::size_of::<libc::cpu_set_t>());
-        assert!(cpusetsize * 8 >= info.node.cores as _);
+        assert!(cpusetsize * 8 >= (info.node.cores as _));
         for i in 0..info.node.cores {
             libc::CPU_SET(i, &mut *cpuset);
         }
@@ -777,7 +786,9 @@ unsafe extern "C" fn pthread_attr_init(attr: *mut libc::pthread_attr_t) -> libc:
         } else {
             eprintln!("attempt to spawn a system thread in simulation.");
             eprintln!("note: try to use tokio tasks instead.");
-            eprintln!("note: if you really need to spawn a system thread, set the environment variable `MADSIM_ALLOW_SYSTEM_THREAD` to `1`.");
+            eprintln!(
+                "note: if you really need to spawn a system thread, set the environment variable `MADSIM_ALLOW_SYSTEM_THREAD` to `1`."
+            );
             return -1;
         }
     }
@@ -795,11 +806,11 @@ unsafe extern "C" fn pthread_attr_init(attr: *mut libc::pthread_attr_t) -> libc:
 mod tests {
     use super::*;
     use crate::{
-        context::{current, current_node},
-        runtime::{init_logger, Handle, Runtime},
+        context::{ current, current_node },
+        runtime::{ init_logger, Handle, Runtime },
         time,
     };
-    use std::{collections::HashSet, sync::atomic::AtomicUsize, time::Duration};
+    use std::{ collections::HashSet, sync::atomic::AtomicUsize, time::Duration };
 
     #[test]
     fn spawn_in_block_on() {
@@ -979,12 +990,14 @@ mod tests {
                 let mut tasks = vec![];
                 for i in 0..3 {
                     let tx = tx.clone();
-                    tasks.push(spawn(async move {
-                        for j in 0..5 {
-                            tx.send(i * 10 + j).unwrap();
-                            tokio::task::yield_now().await;
-                        }
-                    }));
+                    tasks.push(
+                        spawn(async move {
+                            for j in 0..5 {
+                                tx.send(i * 10 + j).unwrap();
+                                tokio::task::yield_now().await;
+                            }
+                        })
+                    );
                 }
                 drop(tx);
                 futures_util::future::join_all(tasks).await;
@@ -1002,13 +1015,20 @@ mod tests {
             // available_parallelism is 1 by default
             assert_eq!(std::thread::available_parallelism().unwrap().get(), 1);
         });
-        let f1 = runtime.create_node().build().spawn(async move {
-            // available_parallelism is 1 by default
-            assert_eq!(std::thread::available_parallelism().unwrap().get(), 1);
-        });
-        let f2 = runtime.create_node().cores(128).build().spawn(async move {
-            assert_eq!(std::thread::available_parallelism().unwrap().get(), 128);
-        });
+        let f1 = runtime
+            .create_node()
+            .build()
+            .spawn(async move {
+                // available_parallelism is 1 by default
+                assert_eq!(std::thread::available_parallelism().unwrap().get(), 1);
+            });
+        let f2 = runtime
+            .create_node()
+            .cores(128)
+            .build()
+            .spawn(async move {
+                assert_eq!(std::thread::available_parallelism().unwrap().get(), 128);
+            });
         runtime.block_on(f1).unwrap();
         runtime.block_on(f2).unwrap();
     }
